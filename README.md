@@ -1,8 +1,6 @@
-# ACCIO-PRM
+# OpenTool-PRM
 
 ## Roadmap
-
-Also available at [here](https://code.alibaba-inc.com/peiranxu/Search-R1/issues#)
 
 [ ] skywork-v2 as the rm
 
