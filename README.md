@@ -45,3 +45,6 @@ bash train_ppo.sh
 * `train_ppo.sh`, `train_grpo.sh`
 * `server_launch.sh`, `retrieval_launch.sh`
 * `verl/utils/reward_score`: reward model, `pc_reward.py`: llm as judge reward, `skywork_reward.py`: use Skywork-v2 as rm
+
+
+We thank [Search-R1](https://github.com/PeterGriffinJin/Search-R1), [veRL](https://github.com/volcengine/verl), and [ReasonFlux](https://github.com/Gen-Verse/ReasonFlux)
