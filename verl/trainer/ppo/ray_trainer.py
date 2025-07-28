@@ -621,18 +621,144 @@ class RayPPOTrainer(object):
         self.actor_rollout_wg.init_model()
 
     def _save_checkpoint(self):
-        actor_local_path = os.path.join(self.config.trainer.default_local_dir, 'actor',
-                                        f'global_step_{self.global_steps}')
+        # Save checkpoint in format: verl_checkpoints/experiment_name/actor/global_step_100
+        actor_local_path = os.path.join(self.config.trainer.default_local_dir, "actor", f"global_step_{self.global_steps}")
+
+        print(f"actor_local_path: {actor_local_path}")
+        
         actor_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(
-            self.config.trainer.default_hdfs_dir, 'actor')
+            self.config.trainer.default_hdfs_dir, "actor", f"global_step_{self.global_steps}")
+
+        # Create directory if it doesn't exist
+        local_mkdir(os.path.dirname(actor_local_path))
+        
         self.actor_rollout_wg.save_checkpoint(actor_local_path, actor_remote_path)
 
         if self.use_critic:
-            critic_local_path = os.path.join(self.config.trainer.default_local_dir, 'critic',
-                                             f'global_step_{self.global_steps}')
+            critic_local_path = os.path.join(self.config.trainer.default_local_dir, "critic", f"global_step_{self.global_steps}")
             critic_remote_path = None if self.config.trainer.default_hdfs_dir is None else os.path.join(
-                self.config.trainer.default_hdfs_dir, 'critic')
+                self.config.trainer.default_hdfs_dir, "critic", f"global_step_{self.global_steps}")
             self.critic_wg.save_checkpoint(critic_local_path, critic_remote_path)
+
+        # save dataloader state if available
+        try:
+            dataloader_local_path = os.path.join(self.config.trainer.default_local_dir, "data.pt")
+            if hasattr(self, 'train_dataloader') and hasattr(self.train_dataloader, 'state_dict'):
+                dataloader_state_dict = self.train_dataloader.state_dict()
+                torch.save(dataloader_state_dict, dataloader_local_path)
+        except Exception as e:
+            print(f"Warning: Could not save dataloader state: {e}")
+
+        # latest checkpointed iteration tracker (for atomic usage)
+        local_latest_checkpointed_iteration = os.path.join(self.config.trainer.default_local_dir, "latest_checkpointed_iteration.txt")
+        with open(local_latest_checkpointed_iteration, "w") as f:
+            f.write(str(self.global_steps))
+
+    def _load_checkpoint(self):
+        """
+        Load checkpoint based on resume_mode configuration.
+        Returns the global_step to resume from.
+        """
+        # Check resume_mode from config, default to 'auto'
+        resume_mode = getattr(self.config.trainer, 'resume_mode', 'auto')
+        
+        if resume_mode == "disable":
+            print("Resume mode is disabled, training from scratch")
+            return 0
+
+        # Determine checkpoint folder
+        if self.config.trainer.default_hdfs_dir is not None:
+            print("Warning: Loading from HDFS is not implemented yet, using local path")
+        
+        checkpoint_folder = self.config.trainer.default_local_dir
+        if not os.path.isabs(checkpoint_folder):
+            working_dir = os.getcwd()
+            checkpoint_folder = os.path.join(working_dir, checkpoint_folder)
+        
+        # Find global_step_folder based on resume_mode
+        if resume_mode == "auto":
+            # Find the latest checkpoint in format: actor/global_step_X
+            global_steps = self._find_latest_checkpoint(checkpoint_folder)
+            if global_steps is None:
+                print("No checkpoint found, training from scratch")
+                return 0
+        elif resume_mode == "resume_path":
+            resume_from_path = getattr(self.config.trainer, 'resume_from_path', None)
+            if resume_from_path is None:
+                print("resume_from_path is not specified, training from scratch")
+                return 0
+            
+            assert isinstance(resume_from_path, str), "resume_from_path must be str type"
+            assert "global_step_" in resume_from_path, "resume_from_path must specify the global_steps"
+            # Extract global step from path like "actor/global_step_100"
+            global_steps = int(resume_from_path.split("global_step_")[-1])
+        else:
+            print(f"Unknown resume_mode: {resume_mode}, training from scratch")
+            return 0
+
+        print(f"Setting global step to {global_steps}")
+        print(f"Resuming from step {global_steps}")
+
+        # Load actor checkpoint (format: actor/global_step_X)
+        actor_path = os.path.join(checkpoint_folder, "actor", f"global_step_{global_steps}")
+        if os.path.exists(actor_path):
+            try:
+                print(f"Found actor checkpoint at {actor_path}")
+                self.actor_rollout_wg.load_checkpoint(actor_path)
+                print(f"Successfully loaded actor checkpoint from {actor_path}")
+            except Exception as e:
+                print(f"Warning: Failed to load actor checkpoint: {e}")
+
+        # Load critic checkpoint if available (format: critic/global_step_X)
+        if self.use_critic:
+            critic_path = os.path.join(checkpoint_folder, "critic", f"global_step_{global_steps}")
+            if os.path.exists(critic_path):
+                try:
+                    print(f"Found critic checkpoint at {critic_path}")
+                    self.critic_wg.load_checkpoint(critic_path)
+                    print(f"Successfully loaded critic checkpoint from {critic_path}")
+                except Exception as e:
+                    print(f"Warning: Failed to load critic checkpoint: {e}")
+
+        # Load dataloader state if available
+        try:
+            dataloader_local_path = os.path.join(checkpoint_folder, "data.pt")
+            if os.path.exists(dataloader_local_path) and hasattr(self, 'train_dataloader'):
+                dataloader_state_dict = torch.load(dataloader_local_path, weights_only=False)
+                if hasattr(self.train_dataloader, 'load_state_dict'):
+                    self.train_dataloader.load_state_dict(dataloader_state_dict)
+                    print(f"Loaded dataloader state from {dataloader_local_path}")
+        except Exception as e:
+            print(f"Warning: Could not load dataloader state: {e}")
+
+        return global_steps
+
+    def _find_latest_checkpoint(self, checkpoint_folder):
+        """
+        Find the latest checkpoint in format: actor/global_step_X
+        Returns the global step number or None if no checkpoint found
+        """
+        actor_dir = os.path.join(checkpoint_folder, "actor")
+        if not os.path.exists(actor_dir):
+            return None
+        
+        # Find all global_step_* directories in actor folder
+        step_dirs = []
+        for item in os.listdir(actor_dir):
+            if item.startswith("global_step_"):
+                try:
+                    step_num = int(item.split("global_step_")[-1])
+                    step_dirs.append((step_num, item))
+                except ValueError:
+                    continue
+        
+        if not step_dirs:
+            return None
+        
+        # Return the highest step number
+        latest_step = max(step_dirs, key=lambda x: x[0])[0]
+        print(f"Found latest checkpoint at step {latest_step}")
+        return latest_step
 
     def _balance_batch(self, batch: DataProto, metrics, logging_prefix='global_seqlen'):
         """Reorder the data on single controller such that each dp rank gets similar total tokens"""
@@ -660,6 +786,10 @@ class RayPPOTrainer(object):
 
         logger = self.logger
         self.global_steps = 0
+
+        # Load checkpoint before doing anything
+        self.global_steps = self._load_checkpoint()
+
         # perform validation before training
         # currently, we only support validation using the reward_function.
         if self.val_reward_fn is not None and self.config.trainer.get('val_before_train', True):
@@ -669,8 +799,9 @@ class RayPPOTrainer(object):
             if self.config.trainer.get('val_only', False):
                 return
 
-        # we start from step 1
-        self.global_steps += 1
+        # we start from step 1 (or continue from loaded checkpoint)
+        if self.global_steps == 0:
+            self.global_steps += 1
 
         # Agent config preparation
         gen_config = GenerationConfig(
@@ -873,3 +1004,13 @@ class RayPPOTrainer(object):
         })
         
         return batch, metrics
+
+
+def local_mkdir(path):
+    """Create directory with proper error handling"""
+    if not os.path.isabs(path):
+        working_dir = os.getcwd()
+        path = os.path.join(working_dir, path)
+    
+    os.makedirs(path, exist_ok=True)
+    return path

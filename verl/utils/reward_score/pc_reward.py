@@ -60,8 +60,16 @@ AVAILABLE_MODELS = {
     },
     'qwen-max': {
         'provider': 'qwen',
-        'name': 'qwen-max-latest',   # TODO: check the model config
+        'name': 'qwen-max-latest', 
         'max_tokens': 2048
+    },
+    'qwen3': {
+        'provider': 'qwen',
+        'name': 'qwen3-235b-a22b',
+        'max_tokens': 2048,
+        'extra_body': {
+            "enable_thinking": False
+            }
     }
 }
 
@@ -127,6 +135,8 @@ def get_completion(model_id: str, messages: List[Dict[str, str]]) -> str:
     
     # Add extra_body for Gemini
     if model_config['provider'] == 'gemini' and 'extra_body' in model_config:
+        params['extra_body'] = model_config['extra_body']
+    elif model_config['name'].startswith('qwen3'):
         params['extra_body'] = model_config['extra_body']
     
     response = client.chat.completions.create(**params)
@@ -249,7 +259,7 @@ def extract_score(judge_str):
     # Extract max_score if available
     max_score = None
     if len(max_score_match) > 0:
-        max_score = int(max_score_match[-1].group(1).strip())
+        max_score = int(max_score_match[-1].group(1).strip())  # TODO: add check for returned max score
     
     # Calculate final score (sum of all search and think scores)
     final_score = sum(search_scores) + sum(think_scores)
@@ -281,6 +291,7 @@ def compute_score_llm_judge(query_str, solution_str, model_id, max_score=1.):
         response = get_completion(model_id, messages)
         #print("\nResponse:", response)
     except Exception as e:
+        print('Calling API failure')
         print(f"Error: {str(e)}")  # TODO possible failed case check, due to IO failure
         return [], [], None, None, None, None
 
@@ -297,14 +308,14 @@ def compute_score_llm_judge(query_str, solution_str, model_id, max_score=1.):
     
     if do_print:
         print(f"--------------------------------")
+        print('In processing PRM')
         print(f"Query: {query_str}")
         print(f"Solution string: {solution_str}")
-        print(f"Max score: {max_score}")
         print(f"LLM judgement: {response}")
         print(f"Search score: {search_score}")
         print(f"Think score: {think_score}")
-
         print(f"Max score extracted: {max_score_extracted}")
+        print(f"--------------------------------")
     
     return {
         'search_score': search_score,
@@ -355,8 +366,6 @@ def find_paired_tag_positions(text, tag_name, tokenizer):
     # Return the last token position of each closing tag
     return [char2tok[end-1] for end in paired_close_positions if end-1 in char2tok]
 
-
-
 def write_tag_rewards(
     reward_tensor: torch.Tensor,      # shape = [B, seq_len]
     batch_idx: int,                   # 当前样本在 batch 里的下标
@@ -367,14 +376,10 @@ def write_tag_rewards(
     max_score_extracted: int,     # max score extracted from LLM judge
 ):
     """write score to reward_tensor"""
+
+    # checked number match at filter function
     pos_search = find_paired_tag_positions(response_str, 'search', tokenizer)
     pos_think = find_paired_tag_positions(response_str, 'think', tokenizer)
-
-    # If not passing this assertion, it means the string match is not correct
-    assert len(pos_search) == len(search_scores), \
-        f"search tags number {len(pos_search)} ≠ search scores number {len(search_scores)}"
-    assert len(pos_think) == len(think_scores),   \
-        f"think tags number {len(pos_think)} ≠ think scores number {len(think_scores)}"
 
     def assign(pos_list, score_list):
         for p, s in zip(pos_list, score_list):
@@ -384,18 +389,44 @@ def write_tag_rewards(
     assign(pos_think,  think_scores)
 
 
-def filter_llm_judge_score(score_llm_result, response_str):
+def write_tag_rewards_single(
+    reward_tensor: torch.Tensor,      # shape = [seq_len]
+    response_str: str, 
+    search_scores: list[float],       # 每个 <search> 的分
+    think_scores:  list[float],       # 每个 <think>  的分
+    tokenizer,                        # HF tokenizer
+    max_score_extracted: int,     # max score extracted from LLM judge
+):
+    """write score to reward_tensor, single reward tensor"""
+
+    # checked number match at filter function
+    pos_search = find_paired_tag_positions(response_str, 'search', tokenizer)
+    pos_think = find_paired_tag_positions(response_str, 'think', tokenizer)
+
+    def assign(pos_list, score_list):
+        for p, s in zip(pos_list, score_list):
+            reward_tensor[p] = s/max_score_extracted  # normalize PRM to [0, 1]
+
+    assign(pos_search, search_scores)
+    assign(pos_think,  think_scores)
+
+    return reward_tensor
+
+
+def filter_llm_judge_score(score_llm_result, response_str, tokenizer):
         """
         Process LLM judge score results and validate them before applying rewards.
         
         Args:
             score_llm_result: Result from compute_score_llm_judge
             response_str: Response string for tag counting validation
+            tokenizer: HF tokenizer
             
         Returns:
             bool: True if validation passes, False otherwise
         """
         if score_llm_result is None:
+            print('No LLM result found')
             return False
         
         # Handle non-dictionary results (error cases)
@@ -419,15 +450,16 @@ def filter_llm_judge_score(score_llm_result, response_str):
             print(f"LLM Judge Score (sumed tags score > max score extracted)")
             return False
         
-        # Validate that the number of tags matches the number of scores
-        search_pattern = r'<search>(.*?)</search>'
-        think_pattern = r'<think>(.*?)</think>'
-        
-        search_matches = re.findall(search_pattern, response_str, re.DOTALL)
-        think_matches = re.findall(think_pattern, response_str, re.DOTALL)
-        
-        search_count = len(search_matches)
-        think_count = len(think_matches)
+        # Use the same method as write_tag_rewards for accurate counting
+        try:
+            pos_search = find_paired_tag_positions(response_str, 'search', tokenizer)
+            pos_think = find_paired_tag_positions(response_str, 'think', tokenizer)
+            
+            search_count = len(pos_search)
+            think_count = len(pos_think)
+        except Exception as e:
+            print(f"Error in finding paired tag positions: {e}")
+            return False
         
         if len(search_scores) != search_count:
             print(f"WARNING: Search tag count mismatch! Tags: {search_count}, Scores: {len(search_scores)}")

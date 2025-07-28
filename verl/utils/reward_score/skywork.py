@@ -12,7 +12,7 @@ model_name = "Skywork/Skywork-Reward-V2-Llama-3.1-8B"
 rm = AutoModelForSequenceClassification.from_pretrained(
     model_name,
     torch_dtype=torch.bfloat16,
-    device_map=device,
+    device_map="auto",
     attn_implementation="flash_attention_2",
     num_labels=1,
 )

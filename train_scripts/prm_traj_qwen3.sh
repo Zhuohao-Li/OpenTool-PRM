@@ -1,8 +1,7 @@
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export DATA_DIR='/home/data/workgroup/peiran/dataset/nq'
 
-# WAND_PROJECT='Search-R1-dbg'
-WAND_PROJECT='Search-R1-skywork'
+WAND_PROJECT='Search-R1'
 export WANDB_API_KEY=8c62eaba4d523f090fa709e44348c75734ab20a3
 wandb login
 
@@ -20,8 +19,7 @@ export HF_ENDPOINT="https://hf-mirror.com"
 # export BASE_MODEL='Qwen/Qwen2.5-3B'
 # export EXPERIMENT_NAME=nq-search-r1-ppo-qwen2.5-3b-em
 export BASE_MODEL='Qwen/Qwen2.5-3B-Instruct'
-# export EXPERIMENT_NAME=dbg
-export EXPERIMENT_NAME=skywork
+export EXPERIMENT_NAME=nq-ppo-qwen2.5-3b-it-em-prm-qwen3
 # export BASE_MODEL='Qwen/Qwen2.5-7B'
 # export EXPERIMENT_NAME=nq-search-r1-ppo-qwen2.5-7b-em
 # export BASE_MODEL='Qwen/Qwen2.5-7B-Instruct'
@@ -31,6 +29,7 @@ export EXPERIMENT_NAME=skywork
 export VLLM_ATTENTION_BACKEND=XFORMERS # vllm + qwen2-7b with flash_attn has some issues
 
 # max_prompt_length = (config['training']['max_start_length'] + config['training']['max_response_length'] * (config['training']['max_turns'] - 1) + config['training']['max_obs_length'] * config['training']['max_turns'])
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 
 PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     data.train_files=$DATA_DIR/train.parquet \
@@ -80,7 +79,7 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     +trainer.val_only=false \
     +trainer.val_before_train=true \
     trainer.default_hdfs_dir=null \
-    trainer.n_gpus_per_node=4 \
+    trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=100 \
     trainer.test_freq=50 \
@@ -89,18 +88,13 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo \
     trainer.total_epochs=15 \
     trainer.total_training_steps=505 \
     trainer.default_hdfs_dir=null \
-    trainer.default_local_dir=verl_checkpoints/$EXPERIMENT_NAME \
+    trainer.default_local_dir=/home/data/workgroup/peiran/code/Search-R1/verl_checkpoints/$EXPERIMENT_NAME \
     max_turns=2 \
     retriever.url="http://127.0.0.1:8000/retrieve" \
     retriever.topk=3 \
-    skywork_reward.include_score=true \
-    skywork_reward.max_workers=16 \
-    skywork_reward.rollout_from_generation_loop=true \
-    skywork_reward.include_score_val=true \
-    2>&1 | tee logs/dbg-$EXPERIMENT_NAME.log
-
-    # llm_as_judge.include_score=true \
-    # llm_as_judge.model_id='qwen3' \
-    # llm_as_judge.max_workers=16 \
-    # llm_as_judge.rollout_from_generation_loop=true \
-    # llm_as_judge.include_score_val=true \
+    llm_as_judge.include_score=true \
+    llm_as_judge.model_id='qwen3' \
+    llm_as_judge.max_workers=16 \
+    llm_as_judge.rollout_from_generation_loop=false \
+    llm_as_judge.include_score_val=false \
+    2>&1 | tee /home/data/workgroup/peiran/code/Search-R1/logs/${EXPERIMENT_NAME}_${TIMESTAMP}.log

@@ -175,9 +175,28 @@ trainer:
   critic_warmup: 0
   default_hdfs_dir: ~/experiments/gsm8k/ppo/${trainer.experiment_name}
   default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}
+  
+  # Resume mode: "auto", "disable", or "resume_path"
+  # "auto": resume from last checkpoint if available
+  # "disable": start from scratch
+  # "resume_path": resume from a user-defined path
+  resume_mode: disable
+  
+  # Path to resume training from (only used when resume_mode is "resume_path")
+  resume_from_path: null
 
 max_turns: 10
 do_search: true
-include_llm_judge_score: false
-llm_judge_model_id: 'gemini-2.5-flash'
-llm_judge_max_workers: 8  # Number of parallel workers for LLM judge processing
+
+llm_as_judge:
+  include_score: false
+  model_id: 'gemini-2.5-flash'
+  max_workers: 16
+  rollout_from_generation_loop: true
+  include_score_val: false
+  
+skywork_reward:
+  include_score: false
+  max_workers: 16
+  rollout_from_generation_loop: true
+  include_score_val: false

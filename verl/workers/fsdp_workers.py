@@ -534,6 +534,57 @@ class ActorRolloutRefWorker(Worker):
         if self._is_offload_param:
             offload_fsdp_param_and_grad(module=self.actor_module_fsdp, offload_grad=self._is_offload_grad)
 
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=False):
+        """Load checkpoint for actor model"""
+        assert self._is_actor
+        print(f"Loading checkpoint from {local_path}")
+        
+        if not os.path.exists(local_path):
+            print(f"Checkpoint path {local_path} does not exist")
+            return
+            
+        try:
+            # Check if this is a HuggingFace format checkpoint
+            if os.path.exists(os.path.join(local_path, "config.json")):
+                print("Loading HuggingFace format checkpoint")
+                # For HF format, we can load the model directly
+                from transformers import AutoModelForCausalLM
+                
+                if self._is_offload_param:
+                    load_fsdp_param_and_grad(module=self.actor_module_fsdp,
+                                           device_id=torch.cuda.current_device(),
+                                           load_grad=self._is_offload_grad)
+                
+                # Load the state dict
+                loaded_model = AutoModelForCausalLM.from_pretrained(local_path)
+                loaded_state_dict = loaded_model.state_dict()
+                
+                # Load into our FSDP model
+                from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
+                cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=False)
+                with FSDP.state_dict_type(self.actor.actor_module, StateDictType.FULL_STATE_DICT, cfg):
+                    missing_keys, unexpected_keys = self.actor.actor_module.load_state_dict(loaded_state_dict, strict=False)
+                    if missing_keys:
+                        print(f"Missing keys when loading checkpoint: {missing_keys}")
+                    if unexpected_keys:
+                        print(f"Unexpected keys when loading checkpoint: {unexpected_keys}")
+                
+                print(f"Successfully loaded actor checkpoint from {local_path}")
+                
+                if self._is_offload_param:
+                    offload_fsdp_param_and_grad(module=self.actor_module_fsdp, offload_grad=self._is_offload_grad)
+                    
+            else:
+                print(f"Checkpoint format not recognized for {local_path}")
+                
+        except Exception as e:
+            print(f"Error loading checkpoint from {local_path}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        torch.distributed.barrier()
+
 
 class CriticWorker(Worker):
 
@@ -790,6 +841,55 @@ class CriticWorker(Worker):
         torch.distributed.barrier()
         if self._is_offload_param:
             offload_fsdp_param_and_grad(module=self.critic_module, offload_grad=self._is_offload_grad)
+
+    @register(dispatch_mode=Dispatch.ONE_TO_ALL)
+    def load_checkpoint(self, local_path, hdfs_path=None, del_local_after_load=False):
+        """Load checkpoint for critic model"""
+        print(f"Loading critic checkpoint from {local_path}")
+        
+        if not os.path.exists(local_path):
+            print(f"Critic checkpoint path {local_path} does not exist")
+            return
+            
+        try:
+            # Check if this is a HuggingFace format checkpoint
+            if os.path.exists(os.path.join(local_path, "config.json")):
+                print("Loading HuggingFace format critic checkpoint")
+                
+                if self._is_offload_param:
+                    load_fsdp_param_and_grad(module=self.critic_module,
+                                           device_id=torch.cuda.current_device(),
+                                           load_grad=self._is_offload_grad)
+                
+                # Load the state dict
+                from transformers import AutoModelForTokenClassification
+                loaded_model = AutoModelForTokenClassification.from_pretrained(local_path)
+                loaded_state_dict = loaded_model.state_dict()
+                
+                # Load into our FSDP model
+                from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, StateDictType, FullStateDictConfig
+                cfg = FullStateDictConfig(offload_to_cpu=True, rank0_only=False)
+                with FSDP.state_dict_type(self.critic_module, StateDictType.FULL_STATE_DICT, cfg):
+                    missing_keys, unexpected_keys = self.critic_module.load_state_dict(loaded_state_dict, strict=False)
+                    if missing_keys:
+                        print(f"Missing keys when loading critic checkpoint: {missing_keys}")
+                    if unexpected_keys:
+                        print(f"Unexpected keys when loading critic checkpoint: {unexpected_keys}")
+                
+                print(f"Successfully loaded critic checkpoint from {local_path}")
+                
+                if self._is_offload_param:
+                    offload_fsdp_param_and_grad(module=self.critic_module, offload_grad=self._is_offload_grad)
+                    
+            else:
+                print(f"Critic checkpoint format not recognized for {local_path}")
+                
+        except Exception as e:
+            print(f"Error loading critic checkpoint from {local_path}: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        torch.distributed.barrier()
 
 
 # TODO(sgm): we may need to extract it to dp_reward_model.py
