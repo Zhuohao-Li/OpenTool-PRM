@@ -1,22 +1,16 @@
-# ACCIO-PRM
+# OpenTool-PRM
 
 ## Roadmap
 
 Also available at [here](https://code.alibaba-inc.com/peiranxu/Search-R1/issues#)
 
-[ ] skywork-v2 as the rm
-
-[ ] polar as the rm
-
-[ ] GRPO supported
-
-[x] Qwen3-235B-A22B as the juding supported
-
-[x] Gemini-2.5-flash as the juding supported
-
-[x] multi-thread judging with critic supported
-
-[x] predefined prompts
+- [x] skywork-v2 as the rm
+- [ ] polar as the rm
+- [ ] GRPO supported
+- [x] Qwen3-235B-A22B as the juding supported
+- [x] Gemini-2.5-flash as the juding supported
+- [x] multi-thread judging with critic supported
+- [x] predefined prompts
 
 ## Get started
 
